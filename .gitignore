@@ -1,0 +1,12 @@
+venv/
+.env
+**pycache**/
+*.pyc
+.idea/
+.vscode/
+.DS_Store
+*.sqlite3
+alembic/versions/
+node_modules/
+dist/
+build/

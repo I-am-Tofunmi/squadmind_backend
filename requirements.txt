@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────
+#  SquadMind Backend – Python Dependencies
+# ─────────────────────────────────────────────
+
+# Web Framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# Database
+sqlalchemy==2.0.30
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+
+# Redis & Caching
+redis==5.0.4
+hiredis==2.3.2
+
+# Celery (Background Jobs)
+celery==5.3.6
+celery[redis]==5.3.6
+flower==2.0.1
+
+# Auth & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.9
+cryptography==42.0.7
+
+# HTTP Client (Squad API)
+httpx==0.27.0
+aiohttp==3.9.5
+
+# Data Validation
+pydantic==2.7.1
+pydantic-settings==2.2.1
+email-validator==2.1.1
+
+# AI / Forecasting
+openai==1.30.1
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.4.2
+
+# Notifications
+twilio==9.1.0          # WhatsApp / SMS
+sendgrid==6.11.0       # Email
+
+# Utilities
+python-dotenv==1.0.1
+structlog==24.1.0
+tenacity==8.3.0
+arrow==1.3.0
+shortuuid==1.0.13
+
+# Dev / Testing
+pytest==8.2.0
+pytest-asyncio==0.23.6
+httpx==0.27.0
+faker==24.11.0
