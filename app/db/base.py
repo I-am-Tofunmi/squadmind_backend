@@ -29,11 +29,5 @@ class Base(DeclarativeBase):
         )
         return f"<{self.__class__.__name__}({cols})>"
 
-
 # ── Import all models here so Alembic autogenerate sees them ─────────────────
-# (keep this section in sync as you add new models)
-from app.models.user import User           # noqa: F401, E402
-from app.models.transaction import Transaction  # noqa: F401, E402
-from app.models.alert import Alert         # noqa: F401, E402
-from app.models.fraud_log import FraudLog  # noqa: F401, E402
-from app.models.forecast import Forecast   # noqa: F401, E402
+

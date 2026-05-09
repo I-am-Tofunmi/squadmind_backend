@@ -5,6 +5,7 @@ Designed to give the React dashboard everything it needs in ONE request.
 """
 
 from __future__ import annotations
+from uuid import UUID
 
 from datetime import datetime
 from decimal import Decimal
@@ -106,8 +107,8 @@ class DashboardResponse(BaseModel):
 
 # ── Schemas for fraud and alerts ──────────────────────────────────────────────
 class FraudLogResponse(BaseModel):
-    id: str
-    transaction_id: Optional[str]
+    id: UUID
+    transaction_id: Optional[UUID]
     risk_score: Decimal
     risk_level: str
     rules_triggered: Optional[List[str]]
@@ -132,7 +133,7 @@ class AlertResponse(BaseModel):
 
 
 class ForecastResponse(BaseModel):
-    id: str
+    id: UUID
     forecast_period_days: int
     projected_revenue: Decimal
     projected_net: Decimal
