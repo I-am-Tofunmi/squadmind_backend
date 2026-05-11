@@ -20,6 +20,9 @@ from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
+# ── Debug Line ───────────────────────────────────────────────────────────────
+print("DATABASE_URL =", settings.DATABASE_URL)
+
 # ── Engine ───────────────────────────────────────────────────────────────────
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
@@ -29,6 +32,9 @@ engine: AsyncEngine = create_async_engine(
     pool_recycle=3600,           # recycle connections every hour
     echo=settings.DEBUG,         # log SQL in dev mode only
     future=True,
+    connect_args={
+        "statement_cache_size": 0
+    }
 )
 
 # ── Session Factory ───────────────────────────────────────────────────────────
@@ -39,7 +45,6 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
-
 
 # ── FastAPI Dependency ────────────────────────────────────────────────────────
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -88,9 +93,12 @@ async def check_db_connection() -> bool:
     """Ping the database. Used in /health endpoint."""
     try:
         from sqlalchemy import text
+
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
+
         return True
+
     except Exception as e:
         log.error("database_health_check_failed", error=str(e))
         return False
