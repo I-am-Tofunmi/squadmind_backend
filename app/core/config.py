@@ -113,7 +113,8 @@ class Settings(BaseSettings):
     SENDGRID_FROM_NAME: str = "SquadMind AI"
 
     # ── CORS ────────────────────────────────────────────────────────────────
-    CORS_ORIGINS: str = "http://localhost:3000"
+    CORS_ORIGINS: str = "https://squadmind-khaki.vercel.app,http://localhost:5173"
+
 
     @property
     def cors_origins_list(self) -> List[str]:
