@@ -19,6 +19,8 @@ from app.core.config import settings
 # ── Register all models so Alembic sees them ──────────────────────────────────
 from app.db.base import Base  # noqa: F401 — this import registers all models
 from app.models.user import User
+from app.models.virtual_account import VirtualAccount
+from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.alert import Alert
 from app.models.fraud_log import FraudLog
