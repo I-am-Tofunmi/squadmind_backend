@@ -5,6 +5,7 @@ Production-ready setup: lifespan, CORS, error handlers, health check, docs.
 
 from __future__ import annotations
 
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -20,19 +21,12 @@ from app.core.logging import configure_logging, get_logger
 from app.db.redis import check_redis_connection
 from app.db.session import check_db_connection
 
-# Logging must be configured before the first import of structlog
 configure_logging()
 log = get_logger(__name__)
 
 
-# ── Lifespan (startup + shutdown) ─────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    """
-    FastAPI lifespan context manager.
-    Replaces deprecated on_startup / on_shutdown events.
-    """
-    # ── STARTUP ───────────────────────────────────────────────────────────────z
     log.info(
         "squadmind_starting",
         app=settings.APP_NAME,
@@ -40,13 +34,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         env=settings.APP_ENV,
     )
 
-    # Verify database connection
+    # ── Create tables on startup ───────────────────────────────────────────────
+    try:
+        sync_url = os.environ.get("DATABASE_URL_SYNC")
+        if sync_url:
+            from sqlalchemy import create_engine
+            from app.db.base import Base
+            from app.models.user import User
+            from app.models.transaction import Transaction
+            from app.models.alert import Alert
+            from app.models.fraud_log import FraudLog
+            from app.models.forecast import Forecast
+            from app.models.virtual_account import VirtualAccount
+            _engine = create_engine(sync_url)
+            Base.metadata.create_all(_engine)
+            _engine.dispose()
+            log.info("database_tables_created")
+    except Exception as e:
+        log.error("database_table_creation_failed", error=str(e))
+
+    # ── Verify connections ─────────────────────────────────────────────────────
     db_ok = await check_db_connection()
     if not db_ok:
         log.error("database_connection_failed_at_startup")
-        # Don't crash — let health check expose the issue
 
-    # Verify Redis connection
     redis_ok = await check_redis_connection()
     if not redis_ok:
         log.warning("redis_connection_failed_at_startup")
@@ -57,16 +68,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         redis_healthy=redis_ok,
     )
 
-    yield   # ← Application runs here
+    yield
 
-    # ── SHUTDOWN ──────────────────────────────────────────────────────────────
     log.info("squadmind_shutting_down")
     from app.db.session import engine
     await engine.dispose()
     log.info("squadmind_shutdown_complete")
 
 
-# ── App Factory ───────────────────────────────────────────────────────────────
 def create_application() -> FastAPI:
     app = FastAPI(
         title="SquadMind API",
@@ -81,7 +90,6 @@ def create_application() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── Middleware ─────────────────────────────────────────────────────────────
     app.add_middleware(GZipMiddleware, minimum_size=1000)
 
     app.add_middleware(
@@ -93,7 +101,6 @@ def create_application() -> FastAPI:
         expose_headers=["X-Request-ID", "X-Response-Time"],
     )
 
-    # ── Request Timing Middleware ──────────────────────────────────────────────
     @app.middleware("http")
     async def add_timing_header(request: Request, call_next):
         start = time.perf_counter()
@@ -102,7 +109,6 @@ def create_application() -> FastAPI:
         response.headers["X-Response-Time"] = f"{duration_ms:.2f}ms"
         return response
 
-    # ── Global Exception Handlers ──────────────────────────────────────────────
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         log.error(
@@ -137,19 +143,12 @@ def create_application() -> FastAPI:
             headers=getattr(exc, "headers", None),
         )
 
-    # ── Routers ────────────────────────────────────────────────────────────────
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
-    # ── System Routes (outside versioned prefix) ───────────────────────────────
     @app.get("/health", tags=["System"], include_in_schema=False)
     async def health_check():
-        """
-        Kubernetes / load-balancer health probe.
-        Returns 200 if app is running; individual service status in body.
-        """
         db_ok = await check_db_connection()
         redis_ok = await check_redis_connection()
-
         return {
             "status": "ok" if (db_ok and redis_ok) else "degraded",
             "app": settings.APP_NAME,
@@ -176,10 +175,8 @@ def create_application() -> FastAPI:
 
 app = create_application()
 
-# ── Dev Server ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
