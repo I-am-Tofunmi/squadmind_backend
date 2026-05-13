@@ -44,6 +44,7 @@ class SquadService:
     def __init__(self, user: User) -> None:
         if not user.has_squad_credentials:
             raise SquadAPIError("User has no Squad API credentials configured", 422)
+
         self.secret_key = user.squad_secret_key
         self.public_key = user.squad_public_key
         self.base_url = settings.SQUAD_BASE_URL
@@ -61,14 +62,24 @@ class SquadService:
         wait=wait_exponential(multiplier=1, min=1, max=8),
         reraise=True,
     )
-    async def _get(self, path: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+    async def _get(
+        self,
+        path: str,
+        params: Optional[Dict] = None
+    ) -> Dict[str, Any]:
         """Make an authenticated GET request to Squad API."""
         url = f"{self.base_url}{path}"
+
         async with httpx.AsyncClient(timeout=SQUAD_TIMEOUT) as client:
             try:
-                response = await client.get(url, headers=self._headers(), params=params)
+                response = await client.get(
+                    url,
+                    headers=self._headers(),
+                    params=params
+                )
                 response.raise_for_status()
                 return response.json()
+
             except httpx.HTTPStatusError as e:
                 log.error(
                     "squad_api_http_error",
@@ -76,8 +87,61 @@ class SquadService:
                     url=url,
                     body=e.response.text[:500],
                 )
+
                 raise SquadAPIError(
                     f"Squad API error: {e.response.status_code}",
+                    status_code=e.response.status_code,
+                    raw=e.response.text,
+                )
+
+    async def create_business_virtual_account(
+        self,
+        business_name: str,
+        customer_identifier: str,
+        mobile_num: str,
+        beneficiary_account: str,
+        bvn: str,
+    ) -> Dict[str, Any]:
+        """
+        Create a business virtual account via Squad API.
+        """
+
+        payload = {
+            "business_name": business_name,
+            "customer_identifier": customer_identifier,
+            "mobile_num": mobile_num,
+            "beneficiary_account": beneficiary_account,
+            "bvn": bvn,
+        }
+
+        log.info(
+            "squad_create_virtual_account",
+            user_id=str(self.user.id),
+            business_name=business_name,
+        )
+
+        url = f"{self.base_url}/virtual-account/business"
+
+        async with httpx.AsyncClient(timeout=SQUAD_TIMEOUT) as client:
+            try:
+                response = await client.post(
+                    url,
+                    headers=self._headers(),
+                    json=payload,
+                )
+
+                response.raise_for_status()
+                return response.json()
+
+            except httpx.HTTPStatusError as e:
+                log.error(
+                    "squad_virtual_account_creation_failed",
+                    status=e.response.status_code,
+                    body=e.response.text[:500],
+                )
+
+                raise SquadAPIError(
+                    f"Virtual account creation failed: {e.response.status_code}",
                     status_code=e.response.status_code,
                     raw=e.response.text,
                 )
@@ -91,18 +155,24 @@ class SquadService:
     ) -> Dict[str, Any]:
         """
         Fetch paginated transaction history from Squad API.
-        Docs: https://squadinc.gitbook.io/squad-api-documentation
         """
         params: Dict[str, Any] = {
             "page": page,
             "perPage": per_page,
         }
+
         if start_date:
             params["startDate"] = start_date.strftime("%Y-%m-%d")
+
         if end_date:
             params["endDate"] = end_date.strftime("%Y-%m-%d")
 
-        log.info("squad_fetch_transactions", user_id=str(self.user.id), page=page)
+        log.info(
+            "squad_fetch_transactions",
+            user_id=str(self.user.id),
+            page=page
+        )
+
         return await self._get("/transaction/query", params=params)
 
     async def get_all_transactions(
@@ -111,7 +181,6 @@ class SquadService:
     ) -> List[Dict[str, Any]]:
         """
         Paginate through ALL transactions for the lookback window.
-        Handles rate limiting automatically.
         """
         end_date = datetime.now(tz=timezone.utc)
         start_date = end_date - timedelta(days=lookback_days)
@@ -135,39 +204,45 @@ class SquadService:
                     break
 
                 all_transactions.extend(transactions)
-                log.info(
-                    "squad_transactions_fetched",
-                    page=page,
-                    count=len(transactions),
-                    total_so_far=len(all_transactions),
-                )
 
-                # Check if there are more pages
                 total_pages = data.get("totalPages", 1)
                 if page >= total_pages:
                     break
 
                 page += 1
-                await asyncio.sleep(0.2)  # be polite to the API
+                await asyncio.sleep(0.2)
 
             except SquadAPIError as e:
-                log.error("squad_pagination_error", page=page, error=str(e))
+                log.error(
+                    "squad_pagination_error",
+                    page=page,
+                    error=str(e)
+                )
                 break
 
         return all_transactions
 
-    async def get_transaction_by_ref(self, transaction_ref: str) -> Optional[Dict[str, Any]]:
+    async def get_transaction_by_ref(
+        self,
+        transaction_ref: str
+    ) -> Optional[Dict[str, Any]]:
         """Fetch a single transaction by its reference."""
         try:
-            response = await self._get(f"/transaction/verify/{transaction_ref}")
+            response = await self._get(
+                f"/transaction/verify/{transaction_ref}"
+            )
             return response.get("data")
+
         except SquadAPIError:
             return None
 
-    async def verify_webhook(self, payload: str, signature: str) -> bool:
+    async def verify_webhook(
+        self,
+        payload: str,
+        signature: str
+    ) -> bool:
         """
         Verify Squad webhook HMAC signature.
-        Called in the webhook endpoint to authenticate incoming events.
         """
         import hashlib
         import hmac
@@ -181,31 +256,35 @@ class SquadService:
         return hmac.compare_digest(expected, signature)
 
 
-# ── Transaction Normaliser ─────────────────────────────────────────────────────
-def normalise_squad_transaction(raw: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+def normalise_squad_transaction(
+    raw: Dict[str, Any],
+    user_id: str
+) -> Dict[str, Any]:
     """
-    Convert Squad API raw transaction payload into our normalised Transaction model fields.
-    This is the translation layer between Squad's schema and ours.
+    Convert Squad API raw transaction payload
+    into our normalised Transaction model fields.
     """
     from uuid import UUID
 
     amount_kobo = raw.get("transaction_amount", 0) or 0
-    amount_ngn = Decimal(str(amount_kobo)) / 100   # Squad sends amounts in kobo
+    amount_ngn = Decimal(str(amount_kobo)) / 100
 
-    # Determine transaction type from Squad's transaction_type field
     tx_type_map = {
         "debit": "debit",
         "credit": "credit",
         "transfer": "transfer",
         "payment": "payment",
     }
-    raw_type = (raw.get("transaction_type") or "").lower()
-    tx_type = tx_type_map.get(raw_type, "credit")  # default to credit
 
-    # Parse transaction date
+    raw_type = (raw.get("transaction_type") or "").lower()
+    tx_type = tx_type_map.get(raw_type, "credit")
+
     date_str = raw.get("transaction_date") or raw.get("created_at") or ""
+
     try:
-        tx_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        tx_date = datetime.fromisoformat(
+            date_str.replace("Z", "+00:00")
+        )
     except (ValueError, AttributeError):
         tx_date = datetime.now(tz=timezone.utc)
 
@@ -217,12 +296,15 @@ def normalise_squad_transaction(raw: Dict[str, Any], user_id: str) -> Dict[str, 
         "currency": raw.get("currency_id", "NGN"),
         "transaction_type": tx_type,
         "status": (raw.get("transaction_status") or "success").lower(),
-        "customer_name": raw.get("customer_name") or raw.get("meta", {}).get("name"),
+        "customer_name": raw.get("customer_name")
+        or raw.get("meta", {}).get("name"),
         "customer_email": raw.get("email"),
         "customer_phone": raw.get("meta", {}).get("phone"),
-        "customer_id": raw.get("meta", {}).get("customer_id") or raw.get("email"),
+        "customer_id": raw.get("meta", {}).get("customer_id")
+        or raw.get("email"),
         "payment_channel": raw.get("payment_gateway", "").lower() or None,
-        "narration": raw.get("narration") or raw.get("meta", {}).get("narration"),
+        "narration": raw.get("narration")
+        or raw.get("meta", {}).get("narration"),
         "meta": raw,
         "transaction_date": tx_date,
     }

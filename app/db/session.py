@@ -20,8 +20,7 @@ from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
-# ── Debug Line ───────────────────────────────────────────────────────────────
-print("DATABASE_URL =", settings.DATABASE_URL)
+
 
 # ── Engine ───────────────────────────────────────────────────────────────────
 engine: AsyncEngine = create_async_engine(

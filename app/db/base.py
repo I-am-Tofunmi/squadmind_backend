@@ -30,4 +30,3 @@ class Base(DeclarativeBase):
         return f"<{self.__class__.__name__}({cols})>"
 
 # ── Import all models here so Alembic autogenerate sees them ─────────────────
-
