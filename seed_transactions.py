@@ -1,106 +1,172 @@
+"""
+seed_transactions.py
+
+Populate the database with realistic SME transactions for:
+- Dashboard analytics
+- Fraud detection
+- Forecasting
+- TrustScore engine
+- Demo presentation
+
+Run with:
+
+python seed_transactions.py
+"""
+
+import asyncio
+import random
+import uuid
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
-import uuid
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
-from app.core.config import settings
-from app.models.user import User
+from app.db.session import AsyncSessionLocal
 from app.models.transaction import Transaction
+from app.models.user import User
 
 
-# Use sync DB URL
-engine = create_engine(settings.DATABASE_URL_SYNC)
-SessionLocal = sessionmaker(bind=engine)
+CUSTOMER_NAMES = [
+    "Ade Traders",
+    "Bola Ventures",
+    "Chika Stores",
+    "Divine Foods",
+    "Eko Supplies",
+    "Fresh Mart",
+    "Grace Electronics",
+    "Harmony Fashion",
+    "Ikeja Wholesales",
+    "Jide Agro"
+]
+
+PAYMENT_CHANNELS = [
+    "bank_transfer",
+    "pos",
+    "ussd",
+    "card",
+    "virtual_account"
+]
+
+TRANSACTION_TYPES = [
+    "credit",
+    "payment",
+    "transfer",
+    "debit"
+]
+
+STATUSES = [
+    "success",
+    "success",
+    "success",
+    "success",
+    "failed",
+    "pending"
+]
 
 
-def seed_transactions():
-    db = SessionLocal()
+def generate_amount():
+    """
+    Create realistic SME transaction values
+    """
+    base = random.randint(5000, 250000)
 
-    try:
-        # Find the existing test user
-        user = db.query(User).filter(User.email == "user3@example.com").first()
+    # occasional large suspicious transaction
+    if random.randint(1, 20) == 10:
+        base = random.randint(500000, 2000000)
+
+    return Decimal(str(base))
+
+
+def should_flag_fraud(amount):
+    """
+    Basic realistic fraud trigger
+    """
+    if amount > 500000:
+        return True
+
+    if random.randint(1, 15) == 7:
+        return True
+
+    return False
+
+
+async def seed_transactions():
+    async with AsyncSessionLocal() as db:
+
+        # fetch first available user
+        result = await db.execute(select(User).limit(1))
+        user = result.scalar_one_or_none()
 
         if not user:
-            print("User not found: user3@example.com")
+            print("No user found. Register a user first.")
             return
 
-        # Prevent duplicate seeding
-        existing = db.query(Transaction).filter(Transaction.user_id == user.id).first()
-        if existing:
-            print("Transactions already exist for this user.")
-            return
+        print(f"Seeding transactions for user: {user.email}")
 
-        sample_transactions = [
-            {
-                "amount": Decimal("45000.00"),
-                "transaction_type": "credit",
-                "status": "success",
-                "customer_name": "Ade Ventures",
-                "payment_channel": "bank_transfer",
-                "narration": "POS settlement"
-            },
-            {
-                "amount": Decimal("120000.00"),
-                "transaction_type": "credit",
-                "status": "success",
-                "customer_name": "Bisi Stores",
-                "payment_channel": "card",
-                "narration": "Bulk payment"
-            },
-            {
-                "amount": Decimal("850000.00"),
-                "transaction_type": "debit",
-                "status": "success",
-                "customer_name": "Unknown Vendor",
-                "payment_channel": "bank_transfer",
-                "narration": "Large midnight transfer"
-            },
-            {
-                "amount": Decimal("35000.00"),
-                "transaction_type": "debit",
-                "status": "failed",
-                "customer_name": "Supplier A",
-                "payment_channel": "bank_transfer",
-                "narration": "Failed supplier payment"
-            },
-            {
-                "amount": Decimal("78000.00"),
-                "transaction_type": "credit",
-                "status": "success",
-                "customer_name": "Kemi Retail",
-                "payment_channel": "ussd",
-                "narration": "Daily sales inflow"
-            }
-        ]
+        transactions_to_create = []
 
-        for i, tx in enumerate(sample_transactions):
+        for i in range(75):
+            customer = random.choice(CUSTOMER_NAMES)
+            amount = generate_amount()
+            is_flagged = should_flag_fraud(amount)
+
+            fraud_score = Decimal(
+                str(round(random.uniform(65, 95), 2))
+            ) if is_flagged else Decimal(
+                str(round(random.uniform(5, 35), 2))
+            )
+
+            tx_date = datetime.now(timezone.utc) - timedelta(
+                days=random.randint(1, 90),
+                hours=random.randint(1, 23),
+                minutes=random.randint(1, 59)
+            )
+
             transaction = Transaction(
                 id=uuid.uuid4(),
                 user_id=user.id,
-                amount=tx["amount"],
+
+                squad_transaction_ref=f"SQD-{uuid.uuid4().hex[:12].upper()}",
+                squad_merchant_ref=f"MER-{uuid.uuid4().hex[:8].upper()}",
+
+                amount=amount,
                 currency="NGN",
-                transaction_type=tx["transaction_type"],
-                status=tx["status"],
-                customer_name=tx["customer_name"],
-                payment_channel=tx["payment_channel"],
-                narration=tx["narration"],
-                transaction_date=datetime.now(timezone.utc) - timedelta(days=i),
-                is_flagged_fraud=False
+                transaction_type=random.choice(TRANSACTION_TYPES),
+                status=random.choice(STATUSES),
+
+                customer_name=customer,
+                customer_email=f"{customer.lower().replace(' ', '')}@gmail.com",
+                customer_phone=f"080{random.randint(10000000, 99999999)}",
+                customer_id=f"CUST-{random.randint(1000,9999)}",
+
+                payment_channel=random.choice(PAYMENT_CHANNELS),
+                narration=f"Payment from {customer}",
+
+                meta={
+                    "source": "seed_script",
+                    "demo": True
+                },
+
+                is_flagged_fraud=is_flagged,
+                fraud_score=fraud_score,
+
+                transaction_date=tx_date,
+                created_at=tx_date
             )
-            db.add(transaction)
 
-        db.commit()
-        print("Sample transactions seeded successfully!")
+            transactions_to_create.append(transaction)
 
-    except Exception as e:
-        db.rollback()
-        print(f"Error: {str(e)}")
+        db.add_all(transactions_to_create)
+        await db.commit()
 
-    finally:
-        db.close()
+        print("===================================")
+        print("Transactions seeded successfully!")
+        print(f"Total inserted: {len(transactions_to_create)}")
+        print("Dashboard will now show real data.")
+        print("Fraud engine can now trigger alerts.")
+        print("TrustScore engine is ready for build.")
+        print("===================================")
 
 
 if __name__ == "__main__":
-    seed_transactions()
+    asyncio.run(seed_transactions())
