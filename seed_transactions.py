@@ -36,7 +36,7 @@ CUSTOMER_NAMES = [
     "Grace Electronics",
     "Harmony Fashion",
     "Ikeja Wholesales",
-    "Jide Agro"
+    "Jide Agro",
 ]
 
 PAYMENT_CHANNELS = [
@@ -44,14 +44,14 @@ PAYMENT_CHANNELS = [
     "pos",
     "ussd",
     "card",
-    "virtual_account"
+    "virtual_account",
 ]
 
 TRANSACTION_TYPES = [
     "credit",
     "payment",
     "transfer",
-    "debit"
+    "debit",
 ]
 
 STATUSES = [
@@ -60,31 +60,44 @@ STATUSES = [
     "success",
     "success",
     "failed",
-    "pending"
+    "pending",
 ]
 
 
 def generate_amount():
     """
-    Create realistic SME transaction values
+    Create stronger demo-ready transaction values
+    with guaranteed suspicious transactions
     """
-    base = random.randint(5000, 250000)
 
-    # occasional large suspicious transaction
-    if random.randint(1, 20) == 10:
-        base = random.randint(500000, 2000000)
+    # 25% chance of high-value suspicious transaction
+    if random.randint(1, 4) == 2:
+        suspicious_values = [
+            500000,
+            750000,
+            850000,
+            1000000,
+            1200000,
+            1500000,
+            2000000,
+        ]
+        return Decimal(str(random.choice(suspicious_values)))
 
-    return Decimal(str(base))
+    # normal SME transaction
+    return Decimal(str(random.randint(5000, 250000)))
 
 
 def should_flag_fraud(amount):
     """
-    Basic realistic fraud trigger
+    Stronger fraud detection trigger for demo presentation
     """
-    if amount > 500000:
+
+    # automatic fraud flag for large amounts
+    if amount >= 500000:
         return True
 
-    if random.randint(1, 15) == 7:
+    # some medium suspicious transactions
+    if random.randint(1, 6) == 3:
         return True
 
     return False
@@ -93,33 +106,35 @@ def should_flag_fraud(amount):
 async def seed_transactions():
     async with AsyncSessionLocal() as db:
 
-        # fetch first available user
-        result = await db.execute(select(User).limit(1))
+        # Always seed for user1 specifically
+        result = await db.execute(
+            select(User).where(User.email == "user1@example.com")
+        )
         user = result.scalar_one_or_none()
 
         if not user:
-            print("No user found. Register a user first.")
+            print("User user1@example.com not found. Register user first.")
             return
 
         print(f"Seeding transactions for user: {user.email}")
 
         transactions_to_create = []
 
-        for i in range(75):
+        for _ in range(75):
             customer = random.choice(CUSTOMER_NAMES)
             amount = generate_amount()
             is_flagged = should_flag_fraud(amount)
 
-            fraud_score = Decimal(
-                str(round(random.uniform(65, 95), 2))
-            ) if is_flagged else Decimal(
-                str(round(random.uniform(5, 35), 2))
+            fraud_score = (
+                Decimal(str(round(random.uniform(65, 95), 2)))
+                if is_flagged
+                else Decimal(str(round(random.uniform(5, 35), 2)))
             )
 
             tx_date = datetime.now(timezone.utc) - timedelta(
                 days=random.randint(1, 90),
                 hours=random.randint(1, 23),
-                minutes=random.randint(1, 59)
+                minutes=random.randint(1, 59),
             )
 
             transaction = Transaction(
@@ -137,21 +152,21 @@ async def seed_transactions():
                 customer_name=customer,
                 customer_email=f"{customer.lower().replace(' ', '')}@gmail.com",
                 customer_phone=f"080{random.randint(10000000, 99999999)}",
-                customer_id=f"CUST-{random.randint(1000,9999)}",
+                customer_id=f"CUST-{random.randint(1000, 9999)}",
 
                 payment_channel=random.choice(PAYMENT_CHANNELS),
                 narration=f"Payment from {customer}",
 
                 meta={
                     "source": "seed_script",
-                    "demo": True
+                    "demo": True,
                 },
 
                 is_flagged_fraud=is_flagged,
                 fraud_score=fraud_score,
 
                 transaction_date=tx_date,
-                created_at=tx_date
+                created_at=tx_date,
             )
 
             transactions_to_create.append(transaction)
