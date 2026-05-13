@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
+from collections import defaultdict
 
 from fastapi import APIRouter, Query
 from sqlalchemy import func, select, case, and_
@@ -48,20 +49,13 @@ async def get_dashboard(
     db: DB,
     period: str = Query("last_30_days", enum=["last_7_days", "last_30_days", "this_month"]),
 ) -> dict:
-    """
-    Main dashboard endpoint.
-    Cached per user per period for 5 minutes to keep it snappy.
-    Falls back to mock data if no Squad sync has occurred yet.
-    """
     cache_key = f"dashboard:{current_user.id}:{period}"
 
-    # ── Cache Hit ─────────────────────────────────────────────────────────────
     cached = await cache.get(cache_key)
     if cached:
         log.debug("dashboard_cache_hit", user_id=str(current_user.id), period=period)
         return success_response(data=cached)
 
-    # ── Date Range ────────────────────────────────────────────────────────────
     now = datetime.now(tz=timezone.utc)
     if period == "last_7_days":
         start_date = now - timedelta(days=7)
@@ -69,11 +63,10 @@ async def get_dashboard(
     elif period == "this_month":
         start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         prev_start = (start_date - timedelta(days=1)).replace(day=1)
-    else:  # last_30_days (default)
+    else:
         start_date = now - timedelta(days=30)
         prev_start = start_date - timedelta(days=30)
 
-    # ── Check if user has real data ────────────────────────────────────────────
     tx_count_result = await db.execute(
         select(func.count()).where(Transaction.user_id == current_user.id)
     )
@@ -87,10 +80,32 @@ async def get_dashboard(
             db, current_user, period, start_date, prev_start, now
         )
 
-    # ── Cache for 5 minutes ───────────────────────────────────────────────────
     await cache.set(cache_key, dashboard_data, ttl_seconds=300)
 
     return success_response(data=dashboard_data)
+
+
+def _calculate_best_sales_day(revenue_trend: list) -> str:
+    """
+    Calculate the best sales day from revenue trend data.
+    Returns the day of the week with the highest average revenue.
+    """
+    day_revenue = defaultdict(list)
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    for point in revenue_trend:
+        try:
+            date = datetime.strptime(point["date"], "%Y-%m-%d")
+            day_name = day_names[date.weekday()]
+            day_revenue[day_name].append(point["revenue"])
+        except Exception:
+            continue
+
+    if not day_revenue:
+        return "Friday"
+
+    best_day = max(day_revenue, key=lambda d: sum(day_revenue[d]) / len(day_revenue[d]))
+    return best_day
 
 
 async def _build_real_dashboard(
@@ -99,7 +114,6 @@ async def _build_real_dashboard(
     """Build dashboard from actual transaction data."""
     uid = user.id
 
-    # ── Current Period Revenue ────────────────────────────────────────────────
     revenue_q = await db.execute(
         select(
             func.coalesce(func.sum(Transaction.amount), 0).label("total"),
@@ -117,7 +131,6 @@ async def _build_real_dashboard(
     total_revenue = Decimal(str(revenue_row.total))
     total_tx = revenue_row.count
 
-    # ── Previous Period Revenue ───────────────────────────────────────────────
     prev_revenue_q = await db.execute(
         select(func.coalesce(func.sum(Transaction.amount), 0)).where(
             and_(
@@ -134,10 +147,8 @@ async def _build_real_dashboard(
         float(((total_revenue - prev_revenue) / prev_revenue * 100)) if prev_revenue else 0.0
     )
 
-    # ── Average Transaction Value ─────────────────────────────────────────────
     avg_tx_value = total_revenue / total_tx if total_tx else Decimal("0")
 
-    # ── Unique Customers ──────────────────────────────────────────────────────
     unique_customers_q = await db.execute(
         select(func.count(func.distinct(Transaction.customer_id))).where(
             and_(Transaction.user_id == uid, Transaction.transaction_date >= start_date)
@@ -145,7 +156,6 @@ async def _build_real_dashboard(
     )
     unique_customers = unique_customers_q.scalar() or 0
 
-    # ── Fraud Summary ─────────────────────────────────────────────────────────
     fraud_q = await db.execute(
         select(
             func.count().label("count"),
@@ -170,7 +180,6 @@ async def _build_real_dashboard(
     )
     open_cases = open_fraud_q.scalar() or 0
 
-    # ── Revenue Trend (daily) ─────────────────────────────────────────────────
     trend_q = await db.execute(
         select(
             func.date_trunc("day", Transaction.transaction_date).label("day"),
@@ -190,14 +199,15 @@ async def _build_real_dashboard(
         for row in trend_q.all()
     ]
 
-    # ── Health Score ──────────────────────────────────────────────────────────
+    # Calculate best sales day from real trend data
+    best_sales_day = _calculate_best_sales_day(revenue_trend)
+
     score = _calculate_health_score(
         revenue_change=revenue_change,
         fraud_rate=fraud_rate,
         total_tx=total_tx,
     )
 
-    # ── Top Customers ─────────────────────────────────────────────────────────
     top_cust_q = await db.execute(
         select(
             Transaction.customer_id,
@@ -222,7 +232,6 @@ async def _build_real_dashboard(
         for row in top_cust_q.all()
     ]
 
-    # ── Recent Alerts ─────────────────────────────────────────────────────────
     alerts_q = await db.execute(
         select(Alert)
         .where(Alert.user_id == uid)
@@ -255,6 +264,7 @@ async def _build_real_dashboard(
         "squad_last_synced_at": (
             user.squad_last_synced_at.isoformat() if user.squad_last_synced_at else None
         ),
+        "best_sales_day": best_sales_day,
         "metrics": [
             {
                 "label": "Total Revenue",
@@ -289,7 +299,7 @@ async def _build_real_dashboard(
         "revenue_trend": revenue_trend,
         "top_customers": top_customers,
         "unique_customers": unique_customers,
-        "returning_customer_rate": 0.0,  # TODO: compute in Phase 3
+        "returning_customer_rate": 0.0,
         "fraud_summary": {
             "flagged_count": flagged_count,
             "flagged_amount": float(flagged_amount),
@@ -310,10 +320,6 @@ async def _build_real_dashboard(
 def _calculate_health_score(
     revenue_change: float, fraud_rate: float, total_tx: int
 ) -> dict:
-    """
-    Rule-based financial health score (0-100).
-    Simple, explainable, demo-ready.
-    """
     revenue_score = min(100, max(0, 50 + revenue_change))
     fraud_score = max(0, 100 - (fraud_rate * 10))
     volume_score = min(100, total_tx * 2)
@@ -378,8 +384,14 @@ def _generate_pidgin_insight(revenue: Decimal, change: float, tx_count: int) -> 
 def _build_mock_dashboard(user, period: str, now: datetime) -> dict:
     """
     Return rich mock data for users without Squad credentials yet.
-    Makes the demo look alive immediately after registration.
     """
+    mock_trend = [
+        {"date": (now - timedelta(days=i)).strftime("%Y-%m-%d"), "revenue": 140000 + (i * 3000), "transactions": 40 + i}
+        for i in range(29, -1, -1)
+    ]
+
+    best_sales_day = _calculate_best_sales_day(mock_trend)
+
     return {
         "user_id": str(user.id),
         "business_name": user.business_name,
@@ -387,6 +399,7 @@ def _build_mock_dashboard(user, period: str, now: datetime) -> dict:
         "generated_at": now.isoformat(),
         "has_squad_credentials": False,
         "squad_last_synced_at": None,
+        "best_sales_day": best_sales_day,
         "metrics": [
             {"label": "Total Revenue", "value": "₦4,200,000", "raw_value": 4200000, "change_percent": 12.5, "trend": "up"},
             {"label": "Total Transactions", "value": "1,247", "raw_value": 1247, "change_percent": 8.3, "trend": "up"},
@@ -401,10 +414,7 @@ def _build_mock_dashboard(user, period: str, now: datetime) -> dict:
             "ai_summary": "Your business scores 78/100 — Good financial health.",
             "pidgin_summary": "Your business dey do well, e reach 78/100. Small small improvement go make am excellent!",
         },
-        "revenue_trend": [
-            {"date": (now - timedelta(days=i)).strftime("%Y-%m-%d"), "revenue": 140000 + (i * 3000), "transactions": 40 + i}
-            for i in range(29, -1, -1)
-        ],
+        "revenue_trend": mock_trend,
         "top_customers": [
             {"customer_id": "CUST001", "customer_name": "Adebayo Stores", "total_spend": 450000, "transaction_count": 23, "last_transaction_date": (now - timedelta(days=1)).isoformat()},
             {"customer_id": "CUST002", "customer_name": "Ngozi Enterprises", "total_spend": 320000, "transaction_count": 18, "last_transaction_date": (now - timedelta(days=2)).isoformat()},
