@@ -94,8 +94,13 @@ def create_application() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
-        allow_credentials=True,
+        allow_origins=[
+            "https://squadmind-khaki.vercel.app",
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "*",
+        ],
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "X-Response-Time"],
